@@ -33,6 +33,11 @@ class NodeProperties {
         this.id = id;
         this.address = address;
     }
+
+    @Override
+    public String toString() {
+        return Integer.toString(this.id);
+    }
 }
 
 
@@ -80,9 +85,9 @@ class NodeConnectRunnable implements Runnable {
     @Override
     public void run() {
         while (!Messenger.isAlive(targetAddress)) {
-            System.out.println(this.targetAddress + " not responding.");
+            System.out.println(this.targetAddress + " not responding");
         }
-        System.out.println(this.targetAddress.toString() + " connected.");
+        System.out.println(this.targetAddress.toString() + " connected");
     }
 
 }
@@ -140,6 +145,7 @@ class Node {
     }
 
     private void coordinate() throws InterruptedException {
+        System.out.println("c " + this.currentNode.id);
         ExecutorService executor = Executors.newSingleThreadExecutor();
         executor.invokeAll(Arrays.asList(new Coordinate()), 10, TimeUnit.SECONDS);
         executor.shutdown();
@@ -152,6 +158,12 @@ class Node {
             } catch (InterruptedException e) {
             }
         }
+        System.out.println("t " + coordinator.id);
+        this.nodes.remove(coordinator.id);
+    }
+
+    private void callElection(){
+        System.out.println("e " + Arrays.toString(this.nodes.values().toArray()));
     }
 
     public void start(String configFile, int lineNumber) throws Exception {
@@ -165,6 +177,7 @@ class Node {
             this.coordinate();
         } else {
             this.monitor(coordinator);
+            this.callElection();
         }
 
         this.socket.close();
