@@ -3,6 +3,7 @@ import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.SocketAddress;
 
+
 public class Messenger {
     public static boolean sendMessage(DatagramSocket socket, SocketAddress address, String message) {
         byte[] command = new byte[1024];

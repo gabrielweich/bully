@@ -6,7 +6,6 @@ import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.net.SocketException;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Scanner;
@@ -61,7 +60,7 @@ class MessageProcessor extends Thread {
             try {
                 if (this.isExternalCoordinator())
                     this.checkCoordinator();
-                DatagramPacket packet = Messenger.receive(socket, 500);
+                DatagramPacket packet = Messenger.receive(socket, 1000);
                 String message = Messenger.extractMessage(packet);
                 System.out.println("message > " + message);
                 if (message.startsWith("alive"))
@@ -75,7 +74,7 @@ class MessageProcessor extends Thread {
         }
     }
 
-    private boolean isExternalCoordinator(){
+    private boolean isExternalCoordinator() {
         return this.coordinator != null && this.coordinator.id != this.currentNode.id;
     }
 
@@ -112,8 +111,10 @@ class MessageProcessor extends Thread {
 
     private void processCoordinator(DatagramPacket packet, String message) {
         int coordinatorId = Integer.parseInt(message.split(";")[1]);
-        this.coordinator = this.nodes.get(coordinatorId);
-        System.out.println("c " + coordinatorId);
+        if (coordinatorId > this.currentNode.id) {
+            this.coordinator = this.nodes.get(coordinatorId);
+            System.out.println("c " + coordinatorId);
+        }
     }
 
     private void coordinate() throws InterruptedException {
@@ -125,33 +126,29 @@ class MessageProcessor extends Thread {
         this.end = System.currentTimeMillis() + 10000;
     }
 
-    public void monitor() throws SocketException, InterruptedException {
-        System.out.println("will monitor coordinator " + this.coordinator.id);
-        while (Messenger.isAlive(this.coordinator.address)) {
-            System.out.println("monitoring coordinator");
-            Thread.sleep(3000);
-        }
-        System.out.println("t " + this.coordinator.id);
-        this.callElection();
-    }
-
     private void callElection() throws SocketException, InterruptedException {
+        System.out.println("Calling elections...");
         List<NodeProperties> greaterIdNodes = this.nodes.values().stream().filter(n -> n.id > this.currentNode.id)
                 .collect(Collectors.toList());
 
-        System.out.println("e " + Arrays.toString(greaterIdNodes.toArray()));
-
-
+        DatagramSocket electionSocket = new DatagramSocket();
         for (NodeProperties node : greaterIdNodes) {
-            Messenger.sendMessage(socket, node.address, "election;" + this.currentNode.id);
+            Messenger.sendMessage(electionSocket, node.address, "election;" + this.currentNode.id);
         }
 
-        try {
-            Messenger.receive(socket, 500);
-            this.monitor();
-        } catch (IOException e) {
-            this.coordinate();
-        }
+        new Thread(() -> {
+            try {
+                DatagramPacket p = Messenger.receive(electionSocket, 500);
+                System.out.println(">>> " + Messenger.extractMessage(p));
+            } catch (IOException e) {
+                System.out.println("no response from candidates");
+                try {
+                    this.coordinate();
+                } catch (InterruptedException e1) {
+                    e1.printStackTrace();
+                }
+            }
+        }).start();
     }
 }
 
@@ -221,7 +218,8 @@ class Node {
             es.execute(new NodeConnectRunnable(target.address));
         }
         es.shutdown();
-        es.awaitTermination(2, TimeUnit.MINUTES);
+        while (!es.awaitTermination(2, TimeUnit.MINUTES)) {
+        }
     }
 
     public void start(String configFile, int lineNumber) throws Exception {
