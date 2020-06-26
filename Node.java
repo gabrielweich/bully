@@ -55,6 +55,7 @@ class MessageProcessor extends Thread {
         this.coordinator = coordinator;
     }
 
+    //Laço que processa as mensagens recebidas de outros nodos
     public void run() {
         if (this.isCurrentCoordinator())
             end = System.currentTimeMillis() + 10000;
@@ -82,14 +83,17 @@ class MessageProcessor extends Thread {
         }
     }
 
+    //Verifica se o coordenador é outro nodo
     private boolean isExternalCoordinator() {
         return this.coordinator != null && this.coordinator.id != this.currentNode.id;
     }
 
+    //Verifica se o nodo é o atual coordenador
     private boolean isCurrentCoordinator() {
         return this.coordinator != null && this.coordinator.id == this.currentNode.id;
     }
 
+    //Se o coordenador está a mais de 3s sem responder o nodo torna-se coordenador
     private void checkCoordinator() {
         if (System.currentTimeMillis() - lastCoordinatorCheck > 3000) {
             if (Messenger.isAlive(this.coordinator.address))
@@ -106,6 +110,7 @@ class MessageProcessor extends Thread {
         }
     }
 
+    //Processa uma mensagem de um nodo que iniciou uma eleição respondendo que está vivo e inicia uma nova eleição
     private void processElection(DatagramPacket packet, String message) {
         Messenger.sendMessage(socket, packet.getSocketAddress(), "confirm");
         if (!this.inElection) {
@@ -117,10 +122,12 @@ class MessageProcessor extends Thread {
         }
     }
 
+    //Responde a uma mensagem perguntando se o nodo está vivo
     private void processAlive(DatagramPacket packet, String message) {
         Messenger.sendMessage(socket, packet.getSocketAddress(), "1");
     }
 
+    //Processa uma mensagem de um nodo afirmando ser coordenador e atualiza o coordenador atual
     private void processCoordinator(DatagramPacket packet, String message) {
         int coordinatorId = Integer.parseInt(message.split(";")[1]);
         if (coordinatorId > this.currentNode.id) {
@@ -129,11 +136,13 @@ class MessageProcessor extends Thread {
         }
     }
 
+    //Processa uma mensagem de confirmação de um nodo durante o processo de eleição encerrando a eleição
     private void processConfirm(DatagramPacket packet, String message) {
         this.lastElectionStart = -1;
         this.inElection = false;
     }
 
+    //Verifica se depois de 1s desde o início da eleição não obteve resposta e torna-se coordenador
     private void checkElectionState() {
         if (System.currentTimeMillis() - this.lastElectionStart > 1000) {
             this.inElection = false;
@@ -145,6 +154,7 @@ class MessageProcessor extends Thread {
         }
     }
 
+    //Torna-se coordenador e estabelece um limite de 10s para execução do algoritmo 
     private void coordinate() throws InterruptedException {
         System.out.println("c " + this.currentNode.id);
         for (NodeProperties node : this.nodes.values()) {
@@ -154,6 +164,7 @@ class MessageProcessor extends Thread {
         this.end = System.currentTimeMillis() + 10000;
     }
 
+    //Inicia um processo de eleição enviando uma mensagem para os nodos com id maior
     private void callElection() throws SocketException, InterruptedException {
         this.inElection = true;
         this.lastElectionStart = System.currentTimeMillis();
@@ -169,6 +180,7 @@ class MessageProcessor extends Thread {
     }
 }
 
+//Runnable para testar conexão com um nodo alvo
 class NodeConnectRunnable implements Runnable {
     SocketAddress targetAddress;
 
@@ -195,6 +207,7 @@ class Node {
         this.nodes = new ConcurrentHashMap<>();
     }
 
+    //Lê o arquivo de configuração atualizando o mapeamento de nodos
     private void readConfig(String filename, int lineNumber) throws FileNotFoundException {
         File myObj = new File(filename);
         Scanner myReader = new Scanner(myObj);
@@ -214,6 +227,7 @@ class Node {
         myReader.close();
     }
 
+    //Encontra o nodo com maior id para ser o coordenador inicial
     private NodeProperties getFirstCoordinator() {
         NodeProperties first = this.currentNode;
         for (NodeProperties node : this.nodes.values()) {
@@ -223,12 +237,14 @@ class Node {
         return first;
     }
 
+    //Instancia um socket UDP
     private void connect() throws SocketException {
         SocketAddress address = this.currentNode.address;
         this.socket = new DatagramSocket(address);
         System.out.println("Connected at " + address);
     }
 
+    //Aguarda obter resposta de todos os nodos
     private void waitAllNodesConnect() throws InterruptedException {
         ExecutorService es = Executors.newCachedThreadPool();
         for (NodeProperties target : this.nodes.values()) {
@@ -239,6 +255,7 @@ class Node {
         }
     }
 
+    //Inicia a execução do algoritmo
     public void start(String configFile, int lineNumber) throws Exception {
         this.readConfig(configFile, lineNumber);
         this.connect();
