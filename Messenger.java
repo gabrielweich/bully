@@ -20,14 +20,23 @@ public class Messenger {
         try {
             DatagramSocket socket = new DatagramSocket();
             Messenger.sendMessage(socket, address, "alive");
-            socket.setSoTimeout(1000);
-            byte[] recBuff = new byte[1024];
-            DatagramPacket recPacket = new DatagramPacket(recBuff, recBuff.length);
-            socket.receive(recPacket);
+            Messenger.receive(socket, 1000);
             socket.close();
             return true;
         } catch (IOException e) {
             return false;
         }
+    }
+
+    public static String extractMessage(DatagramPacket packet) {
+        return new String(packet.getData(), 0, packet.getLength());
+    }
+
+    public static DatagramPacket receive(DatagramSocket socket, int timeout) throws IOException {
+        byte[] text = new byte[1024];
+        DatagramPacket packet = new DatagramPacket(text, text.length);
+        socket.setSoTimeout(timeout);
+        socket.receive(packet);
+        return packet;
     }
 }

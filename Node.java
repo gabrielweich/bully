@@ -7,31 +7,24 @@ import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.net.SocketException;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 import java.util.Scanner;
-import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-
-
-class Coordinate implements Callable<Void> {
-    @Override
-    public Void call() throws InterruptedException {
-        while (true) {
-            Thread.sleep(1000);
-        }
-    }
-}
+import java.util.stream.Collectors;
 
 class NodeProperties {
     int id;
     SocketAddress address;
+    boolean connected;
 
     public NodeProperties(int id, SocketAddress address) {
         this.id = id;
         this.address = address;
+        this.connected = false;
     }
 
     @Override
@@ -40,46 +33,133 @@ class NodeProperties {
     }
 }
 
-
-class NodeMessageListener extends Thread {
+class MessageProcessor extends Thread {
     DatagramSocket socket;
     Map<Integer, NodeProperties> nodes;
-    int nodeId;
+    NodeProperties currentNode;
+    NodeProperties coordinator;
+    long end = Long.MAX_VALUE;
+    long lastCoordinatorCheck;
 
-    public NodeMessageListener(DatagramSocket socket, Map<Integer, NodeProperties> nodes, int nodeId) {
+    public MessageProcessor(DatagramSocket socket, Map<Integer, NodeProperties> nodes, NodeProperties currentNode) {
         this.socket = socket;
         this.nodes = nodes;
-        this.nodeId = nodeId;
+        this.currentNode = currentNode;
+    }
+
+    public MessageProcessor(DatagramSocket socket, Map<Integer, NodeProperties> nodes, NodeProperties currentNode,
+            NodeProperties coordinator) {
+        this.socket = socket;
+        this.nodes = nodes;
+        this.currentNode = currentNode;
+        this.coordinator = coordinator;
     }
 
     public void run() {
-        while (!Thread.currentThread().isInterrupted()) {
+        if (this.isCurrentCoordinator())
+            end = System.currentTimeMillis() + 10000;
+
+        while (!Thread.interrupted() && System.currentTimeMillis() < end) {
             try {
-                byte[] texto = new byte[1024];
-                DatagramPacket packet = new DatagramPacket(texto, texto.length);
-                socket.setSoTimeout(2000);
-                socket.receive(packet);
-                String message = new String(packet.getData(), 0, packet.getLength());
+                if (this.isExternalCoordinator())
+                    this.checkCoordinator();
+                DatagramPacket packet = Messenger.receive(socket, 500);
+                String message = Messenger.extractMessage(packet);
+                System.out.println("message > " + message);
                 if (message.startsWith("alive"))
-                    Messenger.sendMessage(socket, packet.getSocketAddress(), "1");
+                    this.processAlive(packet, message);
+                else if (message.startsWith("election"))
+                    this.processElection(packet, message);
+                else if (message.startsWith("coordinator"))
+                    this.processCoordinator(packet, message);
             } catch (IOException e) {
             }
+        }
+    }
+
+    private boolean isExternalCoordinator(){
+        return this.coordinator != null && this.coordinator.id != this.currentNode.id;
+    }
+
+    private boolean isCurrentCoordinator() {
+        return this.coordinator != null && this.coordinator.id == this.currentNode.id;
+    }
+
+    private void checkCoordinator() {
+        if (System.currentTimeMillis() - lastCoordinatorCheck > 3000) {
+            if (Messenger.isAlive(this.coordinator.address))
+                lastCoordinatorCheck = System.currentTimeMillis();
+            else {
+                try {
+                    this.callElection();
+                } catch (SocketException | InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
+
+    private void processElection(DatagramPacket packet, String message) {
+        Messenger.sendMessage(socket, packet.getSocketAddress(), "confirm");
+        try {
+            this.callElection();
+        } catch (SocketException | InterruptedException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void processAlive(DatagramPacket packet, String message) {
+        Messenger.sendMessage(socket, packet.getSocketAddress(), "confirm");
+    }
+
+    private void processCoordinator(DatagramPacket packet, String message) {
+        int coordinatorId = Integer.parseInt(message.split(";")[1]);
+        this.coordinator = this.nodes.get(coordinatorId);
+        System.out.println("c " + coordinatorId);
+    }
+
+    private void coordinate() throws InterruptedException {
+        System.out.println("c " + this.currentNode.id);
+        for (NodeProperties node : this.nodes.values()) {
+            Messenger.sendMessage(socket, node.address, "coordinator;" + this.currentNode.id);
+        }
+        this.coordinator = this.currentNode;
+        this.end = System.currentTimeMillis() + 10000;
+    }
+
+    public void monitor() throws SocketException, InterruptedException {
+        System.out.println("will monitor coordinator " + this.coordinator.id);
+        while (Messenger.isAlive(this.coordinator.address)) {
+            System.out.println("monitoring coordinator");
+            Thread.sleep(3000);
+        }
+        System.out.println("t " + this.coordinator.id);
+        this.callElection();
+    }
+
+    private void callElection() throws SocketException, InterruptedException {
+        System.out.println("e " + Arrays.toString(this.nodes.values().toArray()));
+        List<NodeProperties> greaterIdNodes = this.nodes.values().stream().filter(n -> n.id > this.currentNode.id)
+                .collect(Collectors.toList());
+
+        for (NodeProperties node : greaterIdNodes) {
+            Messenger.sendMessage(socket, node.address, "election;" + this.currentNode.id);
+        }
+
+        try {
+            Messenger.receive(socket, 500);
+            this.monitor();
+        } catch (IOException e) {
+            this.coordinate();
         }
     }
 }
 
 class NodeConnectRunnable implements Runnable {
     SocketAddress targetAddress;
-    int nodeId;
-    int targetId;
-    Map<Integer, NodeProperties> nodes;
 
-    public NodeConnectRunnable(SocketAddress targetAddress, int nodeId, int targetId,
-            Map<Integer, NodeProperties> nodes) {
+    public NodeConnectRunnable(SocketAddress targetAddress) {
         this.targetAddress = targetAddress;
-        this.nodeId = nodeId;
-        this.targetId = targetId;
-        this.nodes = nodes;
     }
 
     @Override
@@ -120,15 +200,6 @@ class Node {
         myReader.close();
     }
 
-    private boolean waitAllNodesConnect() throws InterruptedException {
-        ExecutorService es = Executors.newCachedThreadPool();
-        for (NodeProperties target : this.nodes.values()) {
-            es.execute(new NodeConnectRunnable(target.address, this.currentNode.id, target.id, this.nodes));
-        }
-        es.shutdown();
-        return es.awaitTermination(2, TimeUnit.MINUTES);
-    }
-
     private NodeProperties getFirstCoordinator() {
         NodeProperties first = this.currentNode;
         for (NodeProperties node : this.nodes.values()) {
@@ -144,43 +215,27 @@ class Node {
         System.out.println("Connected at " + address);
     }
 
-    private void coordinate() throws InterruptedException {
-        System.out.println("c " + this.currentNode.id);
-        ExecutorService executor = Executors.newSingleThreadExecutor();
-        executor.invokeAll(Arrays.asList(new Coordinate()), 10, TimeUnit.SECONDS);
-        executor.shutdown();
-    }
-
-    private void monitor(NodeProperties coordinator) throws InterruptedException {
-        while (Messenger.isAlive(coordinator.address)) {
-            try {
-                Thread.sleep(3000);
-            } catch (InterruptedException e) {
-            }
+    private void waitAllNodesConnect() throws InterruptedException {
+        ExecutorService es = Executors.newCachedThreadPool();
+        for (NodeProperties target : this.nodes.values()) {
+            es.execute(new NodeConnectRunnable(target.address));
         }
-        System.out.println("t " + coordinator.id);
-        this.nodes.remove(coordinator.id);
-    }
-
-    private void callElection(){
-        System.out.println("e " + Arrays.toString(this.nodes.values().toArray()));
+        es.shutdown();
+        es.awaitTermination(2, TimeUnit.MINUTES);
     }
 
     public void start(String configFile, int lineNumber) throws Exception {
         this.readConfig(configFile, lineNumber);
         this.connect();
-        Thread listener = new NodeMessageListener(this.socket, this.nodes, this.currentNode.id);
-        listener.start();
+        Thread messageProcessor = new MessageProcessor(socket, nodes, currentNode);
+        messageProcessor.start();
         this.waitAllNodesConnect();
-        NodeProperties coordinator = this.getFirstCoordinator();
-        if (coordinator.id == this.currentNode.id) {
-            this.coordinate();
-        } else {
-            this.monitor(coordinator);
-            this.callElection();
-        }
-
+        messageProcessor.interrupt();
+        NodeProperties firstCoordinator = this.getFirstCoordinator();
+        System.out.println("c " + firstCoordinator.id);
+        messageProcessor = new MessageProcessor(socket, nodes, currentNode, firstCoordinator);
+        messageProcessor.start();
+        messageProcessor.join();
         this.socket.close();
-        listener.interrupt();
     }
 }
