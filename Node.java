@@ -19,12 +19,10 @@ import java.util.stream.Collectors;
 class NodeProperties {
     int id;
     SocketAddress address;
-    boolean connected;
 
     public NodeProperties(int id, SocketAddress address) {
         this.id = id;
         this.address = address;
-        this.connected = false;
     }
 
     @Override
