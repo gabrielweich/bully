@@ -37,6 +37,7 @@ class MessageProcessor extends Thread {
     NodeProperties coordinator;
     long end = Long.MAX_VALUE;
     long lastCoordinatorCheck;
+    boolean inElection = false;
 
     public MessageProcessor(DatagramSocket socket, Map<Integer, NodeProperties> nodes, NodeProperties currentNode) {
         this.socket = socket;
@@ -58,11 +59,11 @@ class MessageProcessor extends Thread {
 
         while (!Thread.interrupted() && System.currentTimeMillis() < end) {
             try {
-                if (this.isExternalCoordinator())
+                if (!this.inElection && this.isExternalCoordinator())
                     this.checkCoordinator();
                 DatagramPacket packet = Messenger.receive(socket, 1000);
                 String message = Messenger.extractMessage(packet);
-                System.out.println("message > " + message);
+                System.out.println("received: " + message);
                 if (message.startsWith("alive"))
                     this.processAlive(packet, message);
                 else if (message.startsWith("election"))
@@ -98,10 +99,12 @@ class MessageProcessor extends Thread {
 
     private void processElection(DatagramPacket packet, String message) {
         Messenger.sendMessage(socket, packet.getSocketAddress(), "confirm");
-        try {
-            this.callElection();
-        } catch (SocketException | InterruptedException e) {
-            e.printStackTrace();
+        if (!this.inElection) {
+            try {
+                this.callElection();
+            } catch (SocketException | InterruptedException e) {
+                e.printStackTrace();
+            }
         }
     }
 
@@ -128,6 +131,7 @@ class MessageProcessor extends Thread {
 
     private void callElection() throws SocketException, InterruptedException {
         System.out.println("Calling elections...");
+        this.inElection = true;
         List<NodeProperties> greaterIdNodes = this.nodes.values().stream().filter(n -> n.id > this.currentNode.id)
                 .collect(Collectors.toList());
 
@@ -147,6 +151,8 @@ class MessageProcessor extends Thread {
                 } catch (InterruptedException e1) {
                     e1.printStackTrace();
                 }
+            } finally {
+                this.inElection = false;
             }
         }).start();
     }
