@@ -136,9 +136,11 @@ class MessageProcessor extends Thread {
     }
 
     private void callElection() throws SocketException, InterruptedException {
-        System.out.println("e " + Arrays.toString(this.nodes.values().toArray()));
         List<NodeProperties> greaterIdNodes = this.nodes.values().stream().filter(n -> n.id > this.currentNode.id)
                 .collect(Collectors.toList());
+
+        System.out.println("e " + Arrays.toString(greaterIdNodes.toArray()));
+
 
         for (NodeProperties node : greaterIdNodes) {
             Messenger.sendMessage(socket, node.address, "election;" + this.currentNode.id);
