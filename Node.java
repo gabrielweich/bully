@@ -6,6 +6,8 @@ import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.net.SocketException;
+import java.time.LocalDateTime;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Scanner;
@@ -37,7 +39,8 @@ class MessageProcessor extends Thread {
     NodeProperties coordinator;
     long end = Long.MAX_VALUE;
     long lastCoordinatorCheck;
-    boolean inElection = false;
+    long lastElectionStart;
+    boolean inElection;
 
     public MessageProcessor(DatagramSocket socket, Map<Integer, NodeProperties> nodes, NodeProperties currentNode) {
         this.socket = socket;
@@ -61,7 +64,9 @@ class MessageProcessor extends Thread {
             try {
                 if (!this.inElection && this.isExternalCoordinator())
                     this.checkCoordinator();
-                DatagramPacket packet = Messenger.receive(socket, 1000);
+                if (this.inElection)
+                    this.checkElectionState();
+                DatagramPacket packet = Messenger.receive(socket, 100);
                 String message = Messenger.extractMessage(packet);
                 System.out.println("received: " + message);
                 if (message.startsWith("alive"))
@@ -70,6 +75,9 @@ class MessageProcessor extends Thread {
                     this.processElection(packet, message);
                 else if (message.startsWith("coordinator"))
                     this.processCoordinator(packet, message);
+                else if (message.startsWith("confirm"))
+                    this.processConfirm(packet, message);
+
             } catch (IOException e) {
             }
         }
@@ -88,6 +96,8 @@ class MessageProcessor extends Thread {
             if (Messenger.isAlive(this.coordinator.address))
                 lastCoordinatorCheck = System.currentTimeMillis();
             else {
+                System.out.println("t " + this.coordinator.id);
+                this.coordinator = null;
                 try {
                     this.callElection();
                 } catch (SocketException | InterruptedException e) {
@@ -109,7 +119,7 @@ class MessageProcessor extends Thread {
     }
 
     private void processAlive(DatagramPacket packet, String message) {
-        Messenger.sendMessage(socket, packet.getSocketAddress(), "confirm");
+        Messenger.sendMessage(socket, packet.getSocketAddress(), "1");
     }
 
     private void processCoordinator(DatagramPacket packet, String message) {
@@ -117,6 +127,22 @@ class MessageProcessor extends Thread {
         if (coordinatorId > this.currentNode.id) {
             this.coordinator = this.nodes.get(coordinatorId);
             System.out.println("c " + coordinatorId);
+        }
+    }
+
+    private void processConfirm(DatagramPacket packet, String message) {
+        this.lastElectionStart = -1;
+        this.inElection = false;
+    }
+
+    private void checkElectionState() {
+        if (System.currentTimeMillis() - this.lastElectionStart > 1000) {
+            this.inElection = false;
+            try {
+                this.coordinate();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
         }
     }
 
@@ -130,31 +156,17 @@ class MessageProcessor extends Thread {
     }
 
     private void callElection() throws SocketException, InterruptedException {
-        System.out.println("Calling elections...");
         this.inElection = true;
+        this.lastElectionStart = System.currentTimeMillis();
+
         List<NodeProperties> greaterIdNodes = this.nodes.values().stream().filter(n -> n.id > this.currentNode.id)
                 .collect(Collectors.toList());
 
-        DatagramSocket electionSocket = new DatagramSocket();
-        for (NodeProperties node : greaterIdNodes) {
-            Messenger.sendMessage(electionSocket, node.address, "election;" + this.currentNode.id);
-        }
+        System.out.println("e " + Arrays.toString(greaterIdNodes.toArray()));
 
-        new Thread(() -> {
-            try {
-                DatagramPacket p = Messenger.receive(electionSocket, 500);
-                System.out.println(">>> " + Messenger.extractMessage(p));
-            } catch (IOException e) {
-                System.out.println("no response from candidates");
-                try {
-                    this.coordinate();
-                } catch (InterruptedException e1) {
-                    e1.printStackTrace();
-                }
-            } finally {
-                this.inElection = false;
-            }
-        }).start();
+        for (NodeProperties node : greaterIdNodes) {
+            Messenger.sendMessage(this.socket, node.address, "election;" + this.currentNode.id);
+        }
     }
 }
 
