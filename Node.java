@@ -68,7 +68,6 @@ class MessageProcessor extends Thread {
                     this.checkElectionState();
                 DatagramPacket packet = Messenger.receive(socket, 100);
                 String message = Messenger.extractMessage(packet);
-                System.out.println("received: " + message);
                 if (message.startsWith("alive"))
                     this.processAlive(packet, message);
                 else if (message.startsWith("election"))
